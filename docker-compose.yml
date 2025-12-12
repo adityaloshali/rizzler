@@ -1,0 +1,88 @@
+# ===========================================
+# Rizzler - Local Development Stack
+# ===========================================
+# 
+# Usage:
+#   docker compose up -d        # Start services
+#   docker compose logs -f      # View logs
+#   docker compose down         # Stop services
+#
+# Note: The app itself runs locally (not in Docker) for hot-reload.
+#       Only supporting services (Redis, local Postgres) run in Docker.
+# ===========================================
+
+services:
+  # ===========================================
+  # Redis - Task Queue (Celery)
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: rizzler-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ===========================================
+  # PostgreSQL - Local Development DB
+  # (Use this instead of Supabase for local dev)
+  # ===========================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rizzler-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: rizzler
+      POSTGRES_PASSWORD: rizzler_dev_password
+      POSTGRES_DB: rizzler
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rizzler -d rizzler"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ===========================================
+  # Celery Worker - Background Tasks
+  # ===========================================
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rizzler-celery
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://rizzler:rizzler_dev_password@postgres:5432/rizzler
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+    profiles:
+      - full  # Only starts with: docker compose --profile full up
+
+volumes:
+  redis_data:
+  postgres_data:
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  default:
+    name: rizzler-network
+
